@@ -222,7 +222,8 @@ class Glacier3DViz:
 
         # here we add and potentially download background map data
         # and apply it as the topographic texture
-        if use_texture:
+        self.use_texture = use_texture
+        if self.use_texture:
             self.set_topo_texture(show_topo_side_walls=show_topo_side_walls, sidewall_color=sidewall_color)
 
         self.topo_mesh = None
