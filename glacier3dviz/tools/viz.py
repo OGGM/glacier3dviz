@@ -32,6 +32,7 @@ class Glacier3DViz:
         use_texture: bool = False,
         show_topo_side_walls: bool = False,
         sidewall_color: tuple | str | None = None,
+        sidewall_height_factor: int | float = 1,
         texture_args: dict | None = None,
         text_time_args: dict | None = None,
         light_args: dict | None = None,
@@ -84,6 +85,13 @@ class Glacier3DViz:
         show_topo_side_walls: bool
             if True, the edges of the topography are set to the minimum elevation
             of the map, so that the map looks more like a solid.
+        sidewall_color: tuple | str | None
+            The color used for the side wall if `show_topo_side_walls` is True.
+            This color can be a RGB Tuple, HEX code string or color name string.
+        sidewall_height_factor: int | float | None
+            The factor defines the height of the side wall if `show_topo_side_walls` is True.
+            This factor has to be > 1. The default value is 1, resulting in a side wall reaching
+            to the lowest value of the topography.
         texture_args: dict | None
             additional arguments for the texture, see texture.get_topo_texture
         text_time_args: dict | None
@@ -129,11 +137,15 @@ class Glacier3DViz:
                 self.da_topo = self.dataset[self.topo_bedrock]
 
         if show_topo_side_walls:
+            if sidewall_height_factor < 1:
+                sidewall_height_factor = 1
             min_elevation = np.min(self.da_topo)
-            self.da_topo[0, :] = min_elevation
-            self.da_topo[-1, :] = min_elevation
-            self.da_topo[:, 0] = min_elevation
-            self.da_topo[:, -1] = min_elevation
+            max_elevation = np.max(self.da_topo)
+            sidewall_elevation = max_elevation - sidewall_height_factor * (max_elevation - min_elevation)
+            self.da_topo[0, :] = sidewall_elevation
+            self.da_topo[-1, :] = sidewall_elevation
+            self.da_topo[:, 0] = sidewall_elevation
+            self.da_topo[:, -1] = sidewall_elevation
 
         # ignore ice thicknesses equal to 0
         self.da_glacier_thick = xr.where(
