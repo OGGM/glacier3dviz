@@ -261,7 +261,7 @@ class MaskAnnotation(MapAnnotation):
         if glacier_3dviz.use_texture:
 
             # get current topo-texture
-            texture = glacier_3dviz.add_mesh_topo_args_default['texture']
+            texture = glacier_3dviz.topo_texture
 
             # convert texture/numpy array to a PIL Image for resizing and composing
             texture_img = Image.fromarray(texture.to_array()).convert('RGBA')

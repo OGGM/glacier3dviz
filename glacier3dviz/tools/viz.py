@@ -429,6 +429,8 @@ class Glacier3DViz:
             sidewall_color=sidewall_color,
             **self.texture_args_use,
         )
+        # save the annotation-free texture for resetting the texture when experimenting with the glacier(outline) mask
+        self.topo_texture = self.add_mesh_topo_args_default['texture']
 
     def _add_time_text(self, plotter, glacier_algo):
         text_actor_time = plotter.add_text(
