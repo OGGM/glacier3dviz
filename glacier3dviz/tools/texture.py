@@ -6,6 +6,7 @@ import numpy as np
 import pyproj
 import skimage
 from matplotlib import colors as mpl_colors
+from matplotlib.colors import Normalize
 import pyvista as pv
 import xarray as xr
 from skimage.exposure.exposure import rescale_intensity
@@ -40,6 +41,34 @@ def _input_color_to_rgb(color):
             return None  # In case it's not a valid color name or hex code, return None
     return None  # If it doesn't match any expected type
 
+def _set_sidewall_color(texture, sidewall_pixels=1, sidewall_color=None):
+    """
+    This function takes a (texture) image, a number of sidewall pixels and a color.
+    The number of pixels assigned to the sidewall(depending of the ratio between satellite texture and
+    glacier data resolution) will be colored in the given color.
+
+    Parameters
+    ----------
+    texture : ndarray
+        This has to be a numpy ndarray of the shape (x, y, 3) where x and y are the texture pixel dimensions
+
+    sidewall_pixels: int
+        The number of pixels assigned to the sidewall pixels.
+
+    sidewall_color : tuple | str | None
+        Can be a RGB tuple, a HEX code string or a color name string, or None
+    """
+    sidewall_color = _input_color_to_rgb(sidewall_color)
+    # if there is no (valid) sidewall color given, choose a simple grey:
+    if sidewall_color is None:
+        sidewall_color = (100, 100, 100)  # grey color
+
+    texture[:, :sidewall_pixels, :] = np.array(sidewall_color)
+    texture[:, -sidewall_pixels:, :] = np.array(sidewall_color)
+    texture[:sidewall_pixels, :, :] = np.array(sidewall_color)
+    texture[-sidewall_pixels:, :, ] = np.array(sidewall_color)
+
+    return texture
 
 
 def _ice_to_bedrock(
@@ -162,14 +191,40 @@ def get_topo_texture(
     if show_topo_side_walls:
         texture_dims = da_img.shape
         sidewall_pixels = int(math.ceil(texture_dims[0] / data_dims[0]))
-        sidewall_color = _input_color_to_rgb(sidewall_color)
-        # if there is no (valid) sidewall color given, choose a simple grey:
-        if sidewall_color is None:
-            sidewall_color = (100, 100, 100) # grey color
-
-        da_img[:, :sidewall_pixels, :] = np.array(sidewall_color)
-        da_img[:, -sidewall_pixels:, :] = np.array(sidewall_color)
-        da_img[:sidewall_pixels, :, :] = np.array(sidewall_color)
-        da_img[-sidewall_pixels:, :, ] = np.array(sidewall_color)
-
+        da_img = _set_sidewall_color(da_img, sidewall_pixels=sidewall_pixels, sidewall_color=sidewall_color)
     return pv.Texture(da_img.values)
+
+
+def get_cmap_texture(topo,
+                     cmap,
+                     show_topo_side_walls: bool = False,
+                     sidewall_color: tuple | str | None = None,
+                     min_elev: float = 0,
+    )-> pv.Texture:
+    """
+    This function creates a colormap texture with the selected colormap (cmap) for the topography of the glacier.
+    If 'show_topo_side_walls' is set to 'True', the sidewall will be colored by the given sidewall_color. If no color
+    is given, the sidewall will be set to grey.
+
+    Parameters
+    ----------
+    topo : DataArray
+        This has to be an xarray.DataArray with 'y' and 'x' dimensions.
+
+    cmap: matplotlib.colors.ListedColormap
+        A matplotlib colormap object.
+
+    sidewall_color : tuple | str | None
+        Can be a RGB tuple, a HEX code string or a color name string, or None
+
+    min_elev : int | float
+    Minimum elevation of the topography before a sidewall has been added. This is needed as the sidewall can
+    add a new minimum to the topography and this can have an unwanted effect on the coloring with the cmap.
+    """
+
+    norm = Normalize(vmin=min_elev, vmax=topo.max())
+    img = cmap(norm(topo))[:, :,:3]
+    img = (img * 255).astype(np.uint8)
+    if show_topo_side_walls:
+        img = _set_sidewall_color(img, sidewall_color=sidewall_color)
+    return pv.numpy_to_texture(img)

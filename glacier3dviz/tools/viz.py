@@ -5,7 +5,7 @@ import xarray as xr
 import pyvista as pv
 import os
 from .pyvista_xarray_ext import PyVistaGlacierSource
-from .texture import get_topo_texture
+from .texture import get_topo_texture, get_cmap_texture
 from .utils import (resize_ds, get_custom_colormap,
                     get_nice_thickness_colorbar_labels)
 from .moving_camera import get_camera_position_per_frame
@@ -136,12 +136,13 @@ class Glacier3DViz:
             else:
                 self.da_topo = self.dataset[self.topo_bedrock]
 
+        self.min_elevation = np.min(self.da_topo)
+        self.max_elevation = np.max(self.da_topo)
+
         if show_topo_side_walls:
             if sidewall_height_factor < 1:
                 sidewall_height_factor = 1
-            min_elevation = np.min(self.da_topo)
-            max_elevation = np.max(self.da_topo)
-            sidewall_elevation = max_elevation - sidewall_height_factor * (max_elevation - min_elevation)
+            sidewall_elevation = self.max_elevation - sidewall_height_factor * (self.max_elevation - self.min_elevation)
             self.da_topo[0, :] = sidewall_elevation
             self.da_topo[-1, :] = sidewall_elevation
             self.da_topo[:, 0] = sidewall_elevation
@@ -223,8 +224,7 @@ class Glacier3DViz:
         # here we add and potentially download background map data
         # and apply it as the topographic texture
         self.use_texture = use_texture
-        if self.use_texture:
-            self.set_topo_texture(show_topo_side_walls=show_topo_side_walls, sidewall_color=sidewall_color)
+        self.set_topo_texture(show_topo_side_walls=show_topo_side_walls, sidewall_color=sidewall_color)
 
         self.topo_mesh = None
         self.plotter = None
@@ -411,24 +411,33 @@ class Glacier3DViz:
             self.texture_args_use = self.texture_args_default
 
     def set_topo_texture(self, show_topo_side_walls=False, sidewall_color=None):
-        bbox = (
-            self.dataset[self.x].min().item(),
-            self.dataset[self.y].min().item(),
-            self.dataset[self.x].max().item(),
-            self.dataset[self.y].max().item(),
-        )
-        data_dims = ((self.dataset[self.y].shape)[0], (self.dataset[self.x].shape)[0])
 
-        srs = self.dataset.attrs["pyproj_srs"]
+        if self.use_texture:
+            bbox = (
+                self.dataset[self.x].min().item(),
+                self.dataset[self.y].min().item(),
+                self.dataset[self.x].max().item(),
+                self.dataset[self.y].max().item(),
+            )
+            data_dims = ((self.dataset[self.y].shape)[0], (self.dataset[self.x].shape)[0])
 
-        self.add_mesh_topo_args_default['texture'] = get_topo_texture(
-            bbox,
-            data_dims,
-            srs=srs,
-            show_topo_side_walls=show_topo_side_walls,
-            sidewall_color=sidewall_color,
-            **self.texture_args_use,
-        )
+            srs = self.dataset.attrs["pyproj_srs"]
+
+            self.add_mesh_topo_args_default['texture'] = get_topo_texture(
+                bbox,
+                data_dims,
+                srs=srs,
+                show_topo_side_walls=show_topo_side_walls,
+                sidewall_color=sidewall_color,
+                **self.texture_args_use,
+            )
+        else:
+            self.add_mesh_topo_args_default['texture'] = get_cmap_texture(self.dataset[self.topo_bedrock],
+                                                                          self.add_mesh_topo_args_use['cmap'],
+                                                                          show_topo_side_walls=show_topo_side_walls,
+                                                                          sidewall_color=sidewall_color,
+                                                                          min_elev=self.min_elevation
+                                                                          )
         # save the annotation-free texture for resetting the texture when experimenting with the glacier(outline) mask
         self.topo_texture = self.add_mesh_topo_args_default['texture']
 
@@ -478,11 +487,23 @@ class Glacier3DViz:
 
         # here we add potential additional features
         if self.additional_annotations_use is not None:
+            # reset topography texture to the initial/unmasked state
+            self.add_mesh_topo_args_use['texture'] = self.topo_texture
+
             for annotation in self.additional_annotations_use:
                 annotation.add_annotation(glacier_3dviz=self, plotter=pl)
 
+
+
+
+
+
         # add topography with texture (color)
-        pl.add_mesh(self.topo_mesh, **self.add_mesh_topo_args_use)
+        pl.add_mesh(self.topo_mesh,
+                    # scalars='bedrock',
+                    # cmap=self.add_mesh_topo_args_use['cmap'],
+                    **self.add_mesh_topo_args_use)
+
 
         light = pv.Light(**self.light_args_use)
         pl.add_light(light)
