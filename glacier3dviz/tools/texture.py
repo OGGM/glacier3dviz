@@ -1,13 +1,74 @@
 from typing import Any
 
+import math
 import contextily as cx
 import numpy as np
 import pyproj
 import skimage
+from matplotlib import colors as mpl_colors
+from matplotlib.colors import Normalize
 import pyvista as pv
 import xarray as xr
 from skimage.exposure.exposure import rescale_intensity
 from skimage.util import random_noise
+
+def _input_color_to_rgb(color):
+    """
+    This function takes care of handling different type of color inputs(e.g. RGB Tuple, HEX code string or
+     color name string) and converts it into a RGB tuple.
+
+    Parameters
+    ----------
+    color : tuple | str | None
+        Can be a RGB tuple, a HEX code string or a color name string, or None
+    """
+
+    # Check if it's a tuple with 3 elements
+    if isinstance(color, tuple) and len(color) == 3:
+        # If it's a normalized tuple(values between 0 and 1), convert them to 0-255
+        if all(0 <= x <= 1 for x in color):
+            return tuple(int(round(x * 255)) for x in color)
+        # If it's not a normalized tuple, convert elements to integers
+        return tuple(int(round(x)) if isinstance(x, (float, int)) else 0 for x in color)
+
+    # Check if it's a string (color name or hex code)
+    elif isinstance(color, str):
+        # Use matplotlib's to_rgb to handle color names and hex codes
+        try:
+            rgb_normalized = mpl_colors.to_rgb(color)
+            return tuple(int(round(x * 255)) for x in rgb_normalized)
+        except ValueError:
+            return None  # In case it's not a valid color name or hex code, return None
+    return None  # If it doesn't match any expected type
+
+def _set_sidewall_color(texture, sidewall_pixels=1, sidewall_color=None):
+    """
+    This function takes a (texture) image, a number of sidewall pixels and a color.
+    The number of pixels assigned to the sidewall(depending of the ratio between satellite texture and
+    glacier data resolution) will be colored in the given color.
+
+    Parameters
+    ----------
+    texture : ndarray
+        This has to be a numpy ndarray of the shape (x, y, 3) where x and y are the texture pixel dimensions
+
+    sidewall_pixels: int
+        The number of pixels assigned to the sidewall pixels.
+
+    sidewall_color : tuple | str | None
+        Can be a RGB tuple, a HEX code string or a color name string, or None
+    """
+    sidewall_color = _input_color_to_rgb(sidewall_color)
+    # if there is no (valid) sidewall color given, choose a simple grey:
+    if sidewall_color is None:
+        sidewall_color = (100, 100, 100)  # grey color
+
+    texture[:, :sidewall_pixels, :] = np.array(sidewall_color)
+    texture[:, -sidewall_pixels:, :] = np.array(sidewall_color)
+    texture[:sidewall_pixels, :, :] = np.array(sidewall_color)
+    texture[-sidewall_pixels:, :, ] = np.array(sidewall_color)
+
+    return texture
 
 
 def _ice_to_bedrock(
@@ -43,11 +104,14 @@ def _ice_to_bedrock(
 
 def get_topo_texture(
     bbox: tuple[float, float, float, float],
+    data_dims: tuple[int, int],
     srs: str | None = None,
     use_cache: bool = True,
     background_source: Any = cx.providers.Esri.WorldImagery,
     zoom_adjust: int = 1,
     remove_ice: bool = True,
+    show_topo_side_walls: bool = False,
+    sidewall_color: tuple | str | None = None,
 ) -> pv.Texture:
     """Get a texture for the bedrock surface topography from
     satellite imagery data.
@@ -58,6 +122,8 @@ def get_topo_texture(
     ----------
     bbox : tuple
         BBox coordinates (xmin, xmax, ymin, ymax).
+    data_dims : tuple
+        Data dimensions (ydim, xdim).
     srs : str, optional
         The BBox (pyproj) coordinate reference system. If None,
         assumes lat/lon coordinates.
@@ -77,6 +143,11 @@ def get_topo_texture(
         If True, processed the background image so that the intensity of
         white areas (snow, ice) is reduced (default: True). Relevant only
         when true-color satellite imagery is used as background source.
+    show_topo_side_walls : bool, optional
+        If True, the pixels on the edge of the texture will be colored as otherwise the side walls have artifacts
+         of the texture color. (default: False).
+    sidewall_color : tuple | str, optional
+        The color of the side wall if `show_topo_side_walls` is True.
 
     Returns
     -------
@@ -116,4 +187,44 @@ def get_topo_texture(
                           dims=("y", "x", "c"))
     da_img = da_img.sel(x=slice(west, east), y=slice(north, south))
 
+    # adapt the side wall color
+    if show_topo_side_walls:
+        texture_dims = da_img.shape
+        sidewall_pixels = int(math.ceil(texture_dims[0] / data_dims[0]))
+        da_img = _set_sidewall_color(da_img, sidewall_pixels=sidewall_pixels, sidewall_color=sidewall_color)
     return pv.Texture(da_img.values)
+
+
+def get_cmap_texture(topo,
+                     cmap,
+                     show_topo_side_walls: bool = False,
+                     sidewall_color: tuple | str | None = None,
+                     min_elev: float = 0,
+    )-> pv.Texture:
+    """
+    This function creates a colormap texture with the selected colormap (cmap) for the topography of the glacier.
+    If 'show_topo_side_walls' is set to 'True', the sidewall will be colored by the given sidewall_color. If no color
+    is given, the sidewall will be set to grey.
+
+    Parameters
+    ----------
+    topo : DataArray
+        This has to be an xarray.DataArray with 'y' and 'x' dimensions.
+
+    cmap: matplotlib.colors.ListedColormap
+        A matplotlib colormap object.
+
+    sidewall_color : tuple | str | None
+        Can be a RGB tuple, a HEX code string or a color name string, or None
+
+    min_elev : int | float
+    Minimum elevation of the topography before a sidewall has been added. This is needed as the sidewall can
+    add a new minimum to the topography and this can have an unwanted effect on the coloring with the cmap.
+    """
+
+    norm = Normalize(vmin=min_elev, vmax=topo.max())
+    img = cmap(norm(topo))[:, :,:3]
+    img = (img * 255).astype(np.uint8)
+    if show_topo_side_walls:
+        img = _set_sidewall_color(img, sidewall_color=sidewall_color)
+    return pv.numpy_to_texture(img)

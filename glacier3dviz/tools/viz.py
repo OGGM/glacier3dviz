@@ -5,7 +5,7 @@ import xarray as xr
 import pyvista as pv
 import os
 from .pyvista_xarray_ext import PyVistaGlacierSource
-from .texture import get_topo_texture
+from .texture import get_topo_texture, get_cmap_texture
 from .utils import (resize_ds, get_custom_colormap,
                     get_nice_thickness_colorbar_labels)
 from .moving_camera import get_camera_position_per_frame
@@ -31,6 +31,8 @@ class Glacier3DViz:
         ice_thick_lookuptable_args: dict | None = None,
         use_texture: bool = False,
         show_topo_side_walls: bool = False,
+        sidewall_color: tuple | str | None = None,
+        sidewall_height_factor: int | float = 1,
         texture_args: dict | None = None,
         text_time_args: dict | None = None,
         light_args: dict | None = None,
@@ -83,6 +85,13 @@ class Glacier3DViz:
         show_topo_side_walls: bool
             if True, the edges of the topography are set to the minimum elevation
             of the map, so that the map looks more like a solid.
+        sidewall_color: tuple | str | None
+            The color used for the side wall if `show_topo_side_walls` is True.
+            This color can be a RGB Tuple, HEX code string or color name string.
+        sidewall_height_factor: int | float | None
+            The factor defines the height of the side wall if `show_topo_side_walls` is True.
+            This factor has to be > 1. The default value is 1, resulting in a side wall reaching
+            to the lowest value of the topography.
         texture_args: dict | None
             additional arguments for the texture, see texture.get_topo_texture
         text_time_args: dict | None
@@ -108,7 +117,7 @@ class Glacier3DViz:
 
         # resize map to given extent, if None the complete extent is used
         self.dataset = resize_ds(
-            dataset, x_crop, y_crop)
+            dataset, x_crop, y_crop).copy()
 
         # time_display for displaying total years only
         self.time = time
@@ -127,12 +136,17 @@ class Glacier3DViz:
             else:
                 self.da_topo = self.dataset[self.topo_bedrock]
 
+        self.min_elevation = np.min(self.da_topo)
+        self.max_elevation = np.max(self.da_topo)
+
         if show_topo_side_walls:
-            min_elevation = np.min(self.da_topo)
-            self.da_topo[0, :] = min_elevation
-            self.da_topo[-1, :] = min_elevation
-            self.da_topo[:, 0] = min_elevation
-            self.da_topo[:, -1] = min_elevation
+            if sidewall_height_factor < 1:
+                sidewall_height_factor = 1
+            sidewall_elevation = self.max_elevation - sidewall_height_factor * (self.max_elevation - self.min_elevation)
+            self.da_topo[0, :] = sidewall_elevation
+            self.da_topo[-1, :] = sidewall_elevation
+            self.da_topo[:, 0] = sidewall_elevation
+            self.da_topo[:, -1] = sidewall_elevation
 
         # ignore ice thicknesses equal to 0
         self.da_glacier_thick = xr.where(
@@ -209,8 +223,8 @@ class Glacier3DViz:
 
         # here we add and potentially download background map data
         # and apply it as the topographic texture
-        if use_texture:
-            self.set_topo_texture()
+        self.use_texture = use_texture
+        self.set_topo_texture(show_topo_side_walls=show_topo_side_walls, sidewall_color=sidewall_color)
 
         self.topo_mesh = None
         self.plotter = None
@@ -396,21 +410,36 @@ class Glacier3DViz:
         else:
             self.texture_args_use = self.texture_args_default
 
-    def set_topo_texture(self):
-        bbox = (
-            self.dataset[self.x].min().item(),
-            self.dataset[self.y].min().item(),
-            self.dataset[self.x].max().item(),
-            self.dataset[self.y].max().item(),
-        )
+    def set_topo_texture(self, show_topo_side_walls=False, sidewall_color=None):
 
-        srs = self.dataset.attrs["pyproj_srs"]
+        if self.use_texture:
+            bbox = (
+                self.dataset[self.x].min().item(),
+                self.dataset[self.y].min().item(),
+                self.dataset[self.x].max().item(),
+                self.dataset[self.y].max().item(),
+            )
+            data_dims = ((self.dataset[self.y].shape)[0], (self.dataset[self.x].shape)[0])
 
-        self.add_mesh_topo_args_default['texture'] = get_topo_texture(
-            bbox,
-            srs=srs,
-            **self.texture_args_use,
-        )
+            srs = self.dataset.attrs["pyproj_srs"]
+
+            self.add_mesh_topo_args_default['texture'] = get_topo_texture(
+                bbox,
+                data_dims,
+                srs=srs,
+                show_topo_side_walls=show_topo_side_walls,
+                sidewall_color=sidewall_color,
+                **self.texture_args_use,
+            )
+        else:
+            self.add_mesh_topo_args_default['texture'] = get_cmap_texture(self.dataset[self.topo_bedrock],
+                                                                          self.add_mesh_topo_args_use['cmap'],
+                                                                          show_topo_side_walls=show_topo_side_walls,
+                                                                          sidewall_color=sidewall_color,
+                                                                          min_elev=self.min_elevation
+                                                                          )
+        # save the annotation-free texture for resetting the texture when experimenting with the glacier(outline) mask
+        self.topo_texture = self.add_mesh_topo_args_default['texture']
 
     def _add_time_text(self, plotter, glacier_algo):
         text_actor_time = plotter.add_text(
@@ -441,8 +470,7 @@ class Glacier3DViz:
         else:
             pl = pv.Plotter(**self.plotter_args_use)
 
-        # add topography with texture (color)
-        pl.add_mesh(self.topo_mesh, **self.add_mesh_topo_args_use)
+
 
         # add glacier surface, colored by thickness, using custom colorbar
         custom_colorbar = pv.LookupTable(
@@ -459,8 +487,23 @@ class Glacier3DViz:
 
         # here we add potential additional features
         if self.additional_annotations_use is not None:
+            # reset topography texture to the initial/unmasked state
+            self.add_mesh_topo_args_use['texture'] = self.topo_texture
+
             for annotation in self.additional_annotations_use:
                 annotation.add_annotation(glacier_3dviz=self, plotter=pl)
+
+
+
+
+
+
+        # add topography with texture (color)
+        pl.add_mesh(self.topo_mesh,
+                    # scalars='bedrock',
+                    # cmap=self.add_mesh_topo_args_use['cmap'],
+                    **self.add_mesh_topo_args_use)
+
 
         light = pv.Light(**self.light_args_use)
         pl.add_light(light)
