@@ -117,7 +117,7 @@ class Glacier3DViz:
 
         # resize map to given extent, if None the complete extent is used
         self.dataset = resize_ds(
-            dataset, x_crop, y_crop)
+            dataset, x_crop, y_crop).copy()
 
         # time_display for displaying total years only
         self.time = time
