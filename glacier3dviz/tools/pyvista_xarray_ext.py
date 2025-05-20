@@ -17,6 +17,8 @@ class PyVistaGlacierSource(BaseSource):
                  data_array_glacier_thick,
                  time_var_main,
                  time_var_display,
+                 var_display,
+                 da_var_display,
                  initial_time_step=0):
         BaseSource.__init__(
             self,
@@ -26,6 +28,8 @@ class PyVistaGlacierSource(BaseSource):
         self._data_array_glacier_surf = data_array_glacier_surf
         self._data_array_glacier_thick = data_array_glacier_thick
         self._time_step = initial_time_step
+        self.var_display = var_display
+        self._data_array_var_display = da_var_display
         self.time_var_main = time_var_main
         self.time_var_display = time_var_display
 
@@ -62,7 +66,7 @@ class PyVistaGlacierSource(BaseSource):
             da = self.data_array_glacier_surf.isel(
                 {self.time_var_main: self.time_step})
             mesh = da.pyvista.mesh(x="x", y="y").warp_by_scalar()
-            mesh['thickness'] = self.data_array_glacier_thick.isel(
+            mesh[self.var_display] = self._data_array_var_display.isel(
                 {self.time_var_main: self.time_step}).values.flatten()
 
             pdo = self.GetOutputData(outInfo, 0)
